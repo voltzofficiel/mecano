@@ -1,109 +1,126 @@
-ESX = exports["es_extended"]:getSharedObject()
+local ESX = exports['es_extended']:getSharedObject()
 
-local PlayerData = {}
-
-RegisterNetEvent('esx:playerLoaded')
-AddEventHandler('esx:playerLoaded', function(xPlayer)
-     PlayerData = xPlayer
-end)
-
-RegisterNetEvent('esx:setJob')
-AddEventHandler('esx:setJob', function(job)  
-	PlayerData.job = job  
-	Citizen.Wait(5000) 
-end)
-
-
-RegisterNetEvent('esx:playerLoaded')
-AddEventHandler('esx:playerLoaded', function(xPlayer)
-	ESX.PlayerData = xPlayer
-end)
-
-RegisterNetEvent('esx:setJob')
-AddEventHandler('esx:setJob', function(job)
-	ESX.PlayerData.job = job
-end)
-
-RegisterNetEvent('esx:setJob2')
-AddEventHandler('esx:setJob2', function(job2)
-    ESX.PlayerData.job2 = job2
-end)
-
-menugarage = {
-    Base = {Header = {"commonmenu", "interaction_bgd"}, Color = {color_black}, HeaderColor = {0, 215, 255}, Title = "Garage"},
-    Data = {currentMenu = "Menu :"},
-    Events = {
-        onSelected = function(self, _, btn, pMenu, menuData, result )
-
-            for i=1, #GarageList, 1 do 
-                if btn.name == GarageList[i].name then
-                    local pi = GarageList[i].label
-                    local po = GetHashKey(pi)
-                    RequestModel(po)
-                    while not HasModelLoaded(po) do Wait(0) end
-                    local pipo = CreateVehicle(po, Config.Pos.SpawnVehicule, true, false)
-                    TaskWarpPedIntoVehicle(PlayerPedId(), pipo, -1)
-                    SetVehRadioStation(pipo, "OFF")
-                    CloseMenu()
-
-                    CreateThread(function()
-                    
-                        while true do 
-
-                            local ped = PlayerPedId()
-                            local pos = GetEntityCoords(ped)
-                            local menu = Config.Pos.DeleteVehicle
-                            local dist = #(pos - menu)
-                            
-                            if dist <= 2 then
-
-                                ESX.ShowHelpNotification("Appuie sur ~INPUT_CONTEXT~ pour ranger le : ~b~"..pi)
-                                if IsControlJustPressed(1, 51) then
-                                    DeleteVehicle(pipo)
-                                    return
-                                end 
-                            else
-                                Wait(1000)
-                            end
-                            Wait(0)
-                        end
-                    end)
-                end
-            end
-        end,
-},
-    Menu = {
-        ["Menu :"] = {
-            b = {
-            }
-        }
-    }
-}
-
-CreateThread(function()
-
-    for i=1, #GarageList, 1 do 
-        table.insert(menugarage.Menu["Menu :"].b, { name = GarageList[i].name, ask = "", askX = true})
+local function ensurePlayerData()
+    if ESX.PlayerData and ESX.PlayerData.job then
+        return
     end
 
-    while true do 
+    ESX.PlayerData = ESX.GetPlayerData()
+end
+
+RegisterNetEvent('esx:playerLoaded', function(xPlayer)
+    ESX.PlayerData = xPlayer
+end)
+
+RegisterNetEvent('esx:setJob', function(job)
+    ensurePlayerData()
+    ESX.PlayerData.job = job
+end)
+
+local function notify(description, type)
+    lib.notify({
+        title = 'Garage',
+        description = description,
+        type = type or 'inform'
+    })
+end
+
+local function storeVehicle(vehicle)
+    DeleteVehicle(vehicle)
+    notify('Véhicule rangé.', 'success')
+end
+
+local function monitorVehicleStorage(vehicle, label)
+    CreateThread(function()
+        while DoesEntityExist(vehicle) do
+            local ped = PlayerPedId()
+            local pos = GetEntityCoords(ped)
+            local distance = #(pos - Config.Pos.DeleteVehicle)
+
+            if distance <= 2.0 then
+                ESX.ShowHelpNotification(('Appuyez sur ~INPUT_CONTEXT~ pour ranger le ~b~%s'):format(label))
+                if IsControlJustPressed(1, 51) then
+                    storeVehicle(vehicle)
+                    return
+                end
+            else
+                Wait(500)
+            end
+
+            Wait(0)
+        end
+    end)
+end
+
+local function spawnGarageVehicle(vehicleData)
+    local model = GetHashKey(vehicleData.label)
+
+    RequestModel(model)
+    while not HasModelLoaded(model) do
+        Wait(0)
+    end
+
+    local vehicle = CreateVehicle(model, Config.Pos.SpawnVehicule.x, Config.Pos.SpawnVehicule.y, Config.Pos.SpawnVehicule.z, Config.Pos.SpawnVehicule.w, true, false)
+    TaskWarpPedIntoVehicle(PlayerPedId(), vehicle, -1)
+    SetVehRadioStation(vehicle, 'OFF')
+
+    notify(('Vous avez sorti le véhicule ~b~%s'):format(vehicleData.name), 'success')
+    monitorVehicleStorage(vehicle, vehicleData.name)
+end
+
+local function openGarageMenu()
+    ensurePlayerData()
+
+    if not ESX.PlayerData or not ESX.PlayerData.job or ESX.PlayerData.job.name ~= 'bennys' then
+        notify("Vous n'avez pas accès au garage.", 'error')
+        return
+    end
+
+    local options = {}
+    for _, vehicle in ipairs(GarageList) do
+        options[#options + 1] = {
+            title = vehicle.name,
+            description = vehicle.label,
+            onSelect = function()
+                spawnGarageVehicle(vehicle)
+            end
+        }
+    end
+
+    if #options == 0 then
+        options[1] = {
+            title = 'Aucun véhicule disponible',
+            disabled = true
+        }
+    end
+
+    lib.registerContext({
+        id = 'mecano_garage',
+        title = 'Garage',
+        options = options
+    })
+
+    lib.showContext('mecano_garage')
+end
+
+CreateThread(function()
+    while true do
+        ensurePlayerData()
 
         local ped = PlayerPedId()
         local pos = GetEntityCoords(ped)
-        local menu = Config.Pos.Garage
-        local dist = #(pos - menu)
+        local distance = #(pos - Config.Pos.Garage)
 
-        if dist <= 2 and ESX.PlayerData.job.name == "bennys" then
+        if distance <= 2.0 and ESX.PlayerData.job and ESX.PlayerData.job.name == 'bennys' then
+            ESX.ShowHelpNotification('Appuyez sur ~INPUT_CONTEXT~ pour ouvrir le ~b~garage')
+            DrawMarker(6, Config.Pos.Garage.x, Config.Pos.Garage.y, Config.Pos.Garage.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7, 0.7, 0, 215, 255, 200, false, true, 2, false, nil, nil, false)
 
-            ESX.ShowHelpNotification("Appuie sur ~INPUT_CONTEXT~ pour ouvrir le ~b~menu")
-            DrawMarker(6, menu, nil, nil, nil, -90, nil, nil, 0.7, 0.7, 0.7, 0, 251, 255, 200, false, true, 2, false, false, false, false)
-
-            if IsControlJustPressed(1,51) then
-                CreateMenu(menugarage)
+            if IsControlJustPressed(1, 51) then
+                openGarageMenu()
             end
+            Wait(0)
         else
-            Wait(1000)
+            Wait(500)
         end
-        Wait(0)
     end
 end)

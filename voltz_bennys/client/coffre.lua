@@ -1,154 +1,197 @@
-ESX = exports["es_extended"]:getSharedObject()
+local ESX = exports['es_extended']:getSharedObject()
 
-local Voltzaal = {}
-local PlayerData = {}
-
-RegisterNetEvent('esx:playerLoaded')
-AddEventHandler('esx:playerLoaded', function(xPlayer)
-     PlayerData = xPlayer
-end)
-
-RegisterNetEvent('esx:setJob')
-AddEventHandler('esx:setJob', function(job)  
-	PlayerData.job = job  
-	Citizen.Wait(5000) 
-end)
-
-
-RegisterNetEvent('esx:playerLoaded')
-AddEventHandler('esx:playerLoaded', function(xPlayer)
-	ESX.PlayerData = xPlayer
-end)
-
-RegisterNetEvent('esx:setJob')
-AddEventHandler('esx:setJob', function(job)
-	ESX.PlayerData.job = job
-end)
-
-RegisterNetEvent('esx:setJob2')
-AddEventHandler('esx:setJob2', function(job2)
-    ESX.PlayerData.job2 = job2
-end)
-
-function Keyboardput(TextEntry, ExampleText, MaxStringLength)
-    AddTextEntry('FMMC_KEY_TIP1', TextEntry .. ':')
-    DisplayOnscreenKeyboard(1, "FMMC_KEY_TIP1", "", ExampleText, "", "", "", MaxStringLength)
-    blockinput = true
-    while UpdateOnscreenKeyboard() ~= 1 and UpdateOnscreenKeyboard() ~= 2 do
-        Citizen.Wait(0)
+local function ensurePlayerData()
+    if ESX.PlayerData and ESX.PlayerData.job then
+        return
     end
-    if UpdateOnscreenKeyboard() ~= 2 then
-        local result = GetOnscreenKeyboardResult()
-        Citizen.Wait(500)
-        blockinput = false
-        return result
-    else
-        Citizen.Wait(500)
-        blockinput = false
-        return nil
-    end
+
+    ESX.PlayerData = ESX.GetPlayerData()
 end
 
-menucoffre = {
-    Base = { Header = {"commonmenu", "interaction_bgd"}, Color = {color_black}, HeaderColor = {0, 251 ,255}, Title = "Coffre"},
-    Data = { currentMenu = "Menu :"},
-    Events = {
-        onSelected = function(self, _, btn, PMenu, menuData, result)
+RegisterNetEvent('esx:playerLoaded', function(xPlayer)
+    ESX.PlayerData = xPlayer
+end)
 
-            ESX.TriggerServerCallback("Voltz:Inventairemecano", function(inventory) 
-                if btn.name == "Déposé" then
-                    menucoffre.Menu["Déposé"].b = {}
-                    for i=1, #inventory.items, 1 do 
-                        local item = inventory.items[i]
-                        if item.count > 0 then
-                            table.insert(menucoffre.Menu["Déposé"].b, { name = item.name, ask = "~b~x"..item.count, askX = true})
+RegisterNetEvent('esx:setJob', function(job)
+    ensurePlayerData()
+    ESX.PlayerData.job = job
+end)
+
+local function notify(description, type)
+    lib.notify({
+        title = 'Coffre',
+        description = description,
+        type = type or 'inform'
+    })
+end
+
+local function getNumberInput(title, max)
+    local input = lib.inputDialog(title, {
+        { type = 'number', label = 'Quantité', min = 1, max = max }
+    })
+
+    if not input or not input[1] then
+        return
+    end
+
+    local value = tonumber(input[1])
+    if not value or value <= 0 then
+        return
+    end
+
+    return math.floor(value)
+end
+
+local function fetchInventory()
+    local p = promise.new()
+    ESX.TriggerServerCallback('Voltz:Inventairemecano', function(inventory)
+        p:resolve(inventory)
+    end)
+    return Citizen.Await(p)
+end
+
+local function fetchStock()
+    local p = promise.new()
+    ESX.TriggerServerCallback('Voltz:CoffreSocietymecano', function(items)
+        p:resolve(items)
+    end)
+    return Citizen.Await(p)
+end
+
+local function openDepositMenu()
+    local inventory = fetchInventory()
+    local options = {}
+
+    if inventory and inventory.items then
+        for _, item in ipairs(inventory.items) do
+            if item.count and item.count > 0 then
+                local itemName = item.name
+                local itemLabel = item.label or item.name
+                local itemCount = item.count
+
+                options[#options + 1] = {
+                    title = itemLabel,
+                    description = ('x%s'):format(itemCount),
+                    onSelect = function()
+                        local quantity = getNumberInput(('Déposer %s'):format(itemLabel), itemCount)
+                        if not quantity then
+                            notify('Quantité invalide.', 'error')
+                            return
                         end
+
+                        TriggerServerEvent('Voltz:CoffreDeposemecano', itemName, quantity)
+                        notify(('Vous avez déposé x%s %s'):format(quantity, itemLabel), 'success')
                     end
-                    OpenMenu("Déposé")
-                end
+                }
+            end
+        end
+    end
 
-                for i=1, #inventory.items, 1 do 
-                    local item = inventory.items[i]
-                    if btn.name == item.name then
-                        count = Keyboardput("Combien voulez vous déposé ? ", "", 15)
-                        TriggerServerEvent('Voltz:CoffreDeposemecano', item.name, tonumber(count))
-                        OpenMenu("Menu :")
-                    end
-                end
-            end)
+    if #options == 0 then
+        options[1] = {
+            title = 'Inventaire vide',
+            disabled = true
+        }
+    end
 
-            ESX.TriggerServerCallback("Voltz:CoffreSocietymecano", function(items)
-                
-               itemstock = {} 
-               itemstock = items
+    lib.registerContext({
+        id = 'mecano_coffre_depot',
+        title = 'Déposer au coffre',
+        options = options
+    })
 
-               if btn.name == "Retiré" then
-                    menucoffre.Menu["Retiré"].b = {}
+    lib.showContext('mecano_coffre_depot')
+end
 
-                    for i=1, #itemstock, 1 do
+local function openWithdrawMenu()
+    local items = fetchStock()
+    local options = {}
 
-                        if itemstock[i].count > 0 then
-                            table.insert(menucoffre.Menu["Retiré"].b, { name = itemstock[i].label, ask = "~b~x"..itemstock[i].count, askX = true})
+    if items then
+        for _, item in ipairs(items) do
+            if item.count and item.count > 0 then
+                local itemName = item.name
+                local itemLabel = item.label or item.name
+                local itemCount = item.count
+
+                options[#options + 1] = {
+                    title = itemLabel,
+                    description = ('x%s'):format(itemCount),
+                    onSelect = function()
+                        local quantity = getNumberInput(('Retirer %s'):format(itemLabel), itemCount)
+                        if not quantity then
+                            notify('Quantité invalide.', 'error')
+                            return
                         end
+
+                        TriggerServerEvent('Voltz:RetireCoffremecano', itemName, quantity, itemLabel)
+                        notify(('Vous avez retiré x%s %s'):format(quantity, itemLabel), 'success')
                     end
-                    OpenMenu("Retiré")
-                end
+                }
+            end
+        end
+    end
 
-                for i=1, #itemstock, 1 do 
-                
-                    if btn.name == itemstock[i].label then
-                    
-                        itemLabel = itemstock[i].label
-                        count = Keyboardput("Combien voulez vous déposé ? ", "", 15)
-                        TriggerServerEvent('Voltz:RetireCoffremecano', itemstock[i].name, tonumber(count), itemLabel)
-                        OpenMenu("Menu :")
-                    end
+    if #options == 0 then
+        options[1] = {
+            title = 'Coffre vide',
+            disabled = true
+        }
+    end
 
-                end
+    lib.registerContext({
+        id = 'mecano_coffre_retrait',
+        title = 'Retirer du coffre',
+        options = options
+    })
 
-            end)
+    lib.showContext('mecano_coffre_retrait')
+end
 
-        end,
-},
-    Menu = {
-        ["Menu :"] = {
-            b = {
-                {name = "Déposé", ask = ">", askX = true},
-                {name = "Retiré", ask = ">", askX = true},
+local function openCoffreMenu()
+    lib.registerContext({
+        id = 'mecano_coffre',
+        title = 'Coffre',
+        options = {
+            {
+                title = 'Déposer',
+                icon = 'arrow-down',
+                onSelect = openDepositMenu
+            },
+            {
+                title = 'Retirer',
+                icon = 'arrow-up',
+                onSelect = openWithdrawMenu
+            },
+            {
+                title = 'Fermer',
+                icon = 'xmark',
+                onSelect = function() end
             }
-        },
-        ["Déposé"] = {
-            b = {
-            }
-        },
-        ["Retiré"] = {
-            b = {
-            }
-        },
-    }
-}
+        }
+    })
 
-Citizen.CreateThread(function()
+    lib.showContext('mecano_coffre')
+end
 
-    while true do 
-       
+CreateThread(function()
+    while true do
+        ensurePlayerData()
+
         local ped = PlayerPedId()
         local pos = GetEntityCoords(ped)
-        local menu = Config.Pos.Coffre 
-        local dist = #(pos - menu)
+        local distance = #(pos - Config.Pos.Coffre)
 
-        if dist <= 2 and ESX.PlayerData.job.name == "bennys" then
-
-            ESX.ShowHelpNotification("Appuie sur ~INPUT_CONTEXT~ pour ouvrir le ~b~menu")
-            DrawMarker(6, menu, nil, nil, nil, -90, nil, nil, 0.7, 0.7, 0.7, 0, 251, 255, 200, false, true, 2, false, false, false, false)
+        if distance <= 2.0 and ESX.PlayerData.job and ESX.PlayerData.job.name == 'bennys' then
+            ESX.ShowHelpNotification('Appuyez sur ~INPUT_CONTEXT~ pour accéder au ~b~coffre')
+            DrawMarker(6, Config.Pos.Coffre.x, Config.Pos.Coffre.y, Config.Pos.Coffre.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7, 0.7, 0, 251, 255, 200, false, true, 2, false, nil, nil, false)
 
             if IsControlJustPressed(1, 51) then
-                CreateMenu(menucoffre)
+                openCoffreMenu()
             end
-
-        else 
-            Citizen.Wait(1000)
+            Wait(0)
+        else
+            Wait(500)
         end
-        Citizen.Wait(0)
     end
 end)
