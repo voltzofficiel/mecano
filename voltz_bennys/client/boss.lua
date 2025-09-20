@@ -1,186 +1,212 @@
-ESX = exports["es_extended"]:getSharedObject()
+local ESX = exports['es_extended']:getSharedObject()
 
-local Voltzaal = {}
-local PlayerData = {}
-
-RegisterNetEvent('esx:playerLoaded')
-AddEventHandler('esx:playerLoaded', function(xPlayer)
-     PlayerData = xPlayer
-end)
-
-RegisterNetEvent('esx:setJob')
-AddEventHandler('esx:setJob', function(job)  
-	PlayerData.job = job  
-	Citizen.Wait(5000) 
-end)
-
-
-RegisterNetEvent('esx:playerLoaded')
-AddEventHandler('esx:playerLoaded', function(xPlayer)
-	ESX.PlayerData = xPlayer
-end)
-
-RegisterNetEvent('esx:setJob')
-AddEventHandler('esx:setJob', function(job)
-	ESX.PlayerData.job = job
-end)
-
-RegisterNetEvent('esx:setJob2')
-AddEventHandler('esx:setJob2', function(job2)
-    ESX.PlayerData.job2 = job2
-end)
-
-function RefreshMecanoMoney()
-	ESX.TriggerServerCallback('Voltz:getSocietyMoney', function(money)
-		UpdateMecanoMoney(money)
-	end)
-end
-
-function UpdateMecanoMoney(money)
-    MecanoFermier = ESX.Math.GroupDigits(money)
-end
-
-function Keyboardput(TextEntry, ExampleText, MaxStringLength) 
-    AddTextEntry('FMMC_KEY_TIP1', TextEntry .. ':')
-    DisplayOnscreenKeyboard(1, "FMMC_KEY_TIP1", "", ExampleText, "", "", "", MaxStringLength)
-    blockinput = true
-    while UpdateOnscreenKeyboard() ~= 1 and UpdateOnscreenKeyboard() ~= 2 do
-        Citizen.Wait(0)
+local function ensurePlayerData()
+    if ESX.PlayerData and ESX.PlayerData.job then
+        return
     end
-    if UpdateOnscreenKeyboard() ~= 2 then
-        local result = GetOnscreenKeyboardResult()
-        Citizen.Wait(500)
-        blockinput = false
-        return result
-    else
-        Citizen.Wait(500)
-        blockinput = false
-        return nil
-    end
+
+    ESX.PlayerData = ESX.GetPlayerData()
 end
 
-function depotargentmechanic()
-    local amount = Keyboardput("Montant", "", 25)
-    amount = tonumber(amount)
-    if amount == nil then
-        ESX.ShowAdvancedNotification('Banque societé', "~b~Benny's", "Vous avez pas assez ~r~d'argent", 'CHAR_BANK_FLEECA', 9)
-    else
-        TriggerServerEvent("Voltz:mecanodepotentreprise", amount)
-    end
+RegisterNetEvent('esx:playerLoaded', function(xPlayer)
+    ESX.PlayerData = xPlayer
+end)
+
+RegisterNetEvent('esx:setJob', function(job)
+    ensurePlayerData()
+    ESX.PlayerData.job = job
+end)
+
+local function notify(description, type)
+    lib.notify({
+        title = "Benny's",
+        description = description,
+        type = type or 'inform'
+    })
 end
 
-function retraitargentmechanic()
-    local amount = Keyboardput("Montant", "", 25)
-    amount = tonumber(amount)
-    if amount == nil then
-        ESX.ShowAdvancedNotification('Banque societé', "~b~Benny's", "Vous avez pas assez ~r~d'argent", 'CHAR_BANK_FLEECA', 9)
-    else
-        TriggerServerEvent("Voltz:mecanoRetraitEntreprise", amount)
+local function getAmountInput(title)
+    local input = lib.inputDialog(title, {
+        { type = 'number', label = 'Montant', min = 1 }
+    })
+
+    if not input or not input[1] then
+        return
     end
+
+    local value = tonumber(input[1])
+    if not value or value <= 0 then
+        return
+    end
+
+    return math.floor(value)
 end
 
-menuboss = {
-    Base = { Header = {"commonmenu", "interaction_bgd"}, Color = {color_black}, HeaderColor = {0, 251, 255}, Title = "Benny's"},
-    Data = { currentMenu = "Menu :"},
-    Events = {
-        onSelected = function(self, _, btn, PMenu, menuData, result)
+local function fetchCompanyMoney()
+    local p = promise.new()
+    ESX.TriggerServerCallback('Voltz:mecanoArgentEntreprise', function(result)
+        p:resolve(result)
+    end)
+    return Citizen.Await(p)
+end
 
-            ESX.TriggerServerCallback("Voltz:mecanoArgentEntreprise", function(compteentreprise) 
+local function fetchSalaries()
+    local p = promise.new()
+    ESX.TriggerServerCallback('Voltz:mechanicSalaire', function(result)
+        p:resolve(result)
+    end)
+    return Citizen.Await(p)
+end
 
-                if btn.name == "Compte en banque" then
-                    for i=1, #compteentreprise, 1 do 
-                        menuboss.Menu["Compte en banque"].b = {}
-                        table.insert(menuboss.Menu["Compte en banque"].b, { name = "Déposé de l'argent", ask = "", askX = true})
-                        table.insert(menuboss.Menu["Compte en banque"].b, { name = "Retiré de l'argent", ask = "", askX = true})
-                        table.insert(menuboss.Menu["Compte en banque"].b, { name = "~b~Compte bancaire ~s~:", ask = "~g~"..compteentreprise[i].money.."$", askX = true})
-                    end
-                    OpenMenu('Compte en banque')
-                end
+local function depositMoney()
+    local amount = getAmountInput('Déposer dans la société')
+    if not amount then
+        notify('Montant invalide.', 'error')
+        return
+    end
 
-            end, args)
+    TriggerServerEvent('Voltz:mecanodepotentreprise', amount)
+end
 
-            if btn.name == "Déposé de l'argent" then
-                depotargentmechanic()
-                OpenMenu('Menu :')
-            elseif btn.name == "Retiré de l'argent" then
-                retraitargentmechanic()
-                OpenMenu('Menu :')
+local function withdrawMoney()
+    local amount = getAmountInput('Retirer de la société')
+    if not amount then
+        notify('Montant invalide.', 'error')
+        return
+    end
 
-            end
-        
-            ESX.TriggerServerCallback('Voltz:mechanicSalaire', function(salairemechanic) 
-               
+    TriggerServerEvent('Voltz:mecanoRetraitEntreprise', amount)
+end
 
-                if btn.name == "Salaire employé" then
-                    menuboss.Menu["Salaire"].b = {}
-                    for i=1, #salairemechanic, 1 do
-                        if salairemechanic[i].job_name == "bennys" then
-                            table.insert(menuboss.Menu["Salaire"].b, { name = salairemechanic[i].label, ask = "~g~"..salairemechanic[i].salary.."$", askX = true})
-                        end
-                    end
-                    OpenMenu('Salaire')
-                end
+local function openBankMenu()
+    local data = fetchCompanyMoney()
+    local balanceText = 'Inconnu'
 
-                for i=1, #salairemechanic, 1 do
-                    if btn.name == salairemechanic[i].label then
-                        if salairemechanic[i].job_name == "bennys" then
-                            local amount = Keyboardput("Quelle est le nouveau salaire ? ", "", 15)
-                            local label = salairemechanic[i].label
-                            local id = salairemechanic[i].id
-                            TriggerServerEvent('Voltz:mechanicNouveauSalaire', id, label, amount)
-                            OpenMenu("Menu :")
+    if data and data[1] and data[1].money then
+        balanceText = ('%s $'):format(ESX.Math.GroupDigits(data[1].money))
+    end
+
+    lib.registerContext({
+        id = 'mecano_boss_bank',
+        title = 'Banque entreprise',
+        options = {
+            {
+                title = 'Déposer de l\'argent',
+                icon = 'circle-down',
+                onSelect = depositMoney
+            },
+            {
+                title = 'Retirer de l\'argent',
+                icon = 'circle-up',
+                onSelect = withdrawMoney
+            },
+            {
+                title = 'Solde actuel',
+                description = balanceText,
+                disabled = true
+            }
+        }
+    })
+
+    lib.showContext('mecano_boss_bank')
+end
+
+local function openSalaryMenu()
+    local salaries = fetchSalaries()
+    local options = {}
+
+    if salaries then
+        for _, grade in ipairs(salaries) do
+            if grade.job_name == 'bennys' then
+                local gradeLabel = grade.label
+                local gradeSalary = grade.salary
+                local gradeId = grade.id
+
+                options[#options + 1] = {
+                    title = gradeLabel,
+                    description = ('%s $'):format(gradeSalary),
+                    onSelect = function()
+                        local amount = getAmountInput(('Salaire pour %s'):format(gradeLabel))
+                        if not amount then
+                            notify('Montant invalide.', 'error')
                             return
                         end
+
+                        TriggerServerEvent('Voltz:mechanicNouveauSalaire', gradeId, gradeLabel, amount)
+                        notify(('Salaire de %s mis à %s $.'):format(gradeLabel, amount), 'success')
                     end
+                }
+            end
+        end
+    end
+
+    if #options == 0 then
+        options[1] = {
+            title = 'Aucun grade disponible',
+            disabled = true
+        }
+    end
+
+    lib.registerContext({
+        id = 'mecano_boss_salaries',
+        title = 'Salaires',
+        options = options
+    })
+
+    lib.showContext('mecano_boss_salaries')
+end
+
+local function openBossMenu()
+    lib.registerContext({
+        id = 'mecano_boss',
+        title = "Gestion Benny's",
+        options = {
+            {
+                title = 'Banque entreprise',
+                icon = 'wallet',
+                onSelect = openBankMenu
+            },
+            {
+                title = 'Salaire employé',
+                icon = 'money-bill',
+                onSelect = openSalaryMenu
+            },
+            {
+                title = 'Ouvrir la gestion société',
+                icon = 'briefcase',
+                onSelect = function()
+                    ExecuteCommand('society')
                 end
-
-            end, args)
-
-        end,
-},
-    Menu = {
-        ["Menu :"] = {
-            b = {
-                {name = "Compte en banque", ask = ">", askX = true},
-                {name = "Salaire employé", ask = ">", askX = true},
+            },
+            {
+                title = 'Fermer',
+                icon = 'xmark',
+                onSelect = function() end
             }
-        },
-        ["Compte en banque"] = {
-            b = {
-            }
-        },
-        ["Salaire"] = {
-            b = {
-            }
-        },
-        ["Liste des employés"] = {
-            b = {
-            }
-        },
-    }
-}
+        }
+    })
 
-Citizen.CreateThread(function()
+    lib.showContext('mecano_boss')
+end
 
+CreateThread(function()
     while true do
+        ensurePlayerData()
 
         local ped = PlayerPedId()
         local pos = GetEntityCoords(ped)
-        local menu = Config.Pos.Boss
-        local dist = #(pos - menu)
+        local distance = #(pos - Config.Pos.Boss)
 
-        if dist <= 2 and ESX.PlayerData.job.name == "bennys" and ESX.PlayerData.job.grade_name == "boss" then
-
-            ESX.ShowHelpNotification('Appuie sur ~INPUT_CONTEXT~ pour ouvrir le ~b~menu')
-            DrawMarker(6, menu, nil, nil, nil, -90, nil, nil, 0.7, 0.7, 0.7, 0, 251, 255, 200, false, true, 2, false, false, false, false)
+        if distance <= 2.0 and ESX.PlayerData.job and ESX.PlayerData.job.name == 'bennys' and ESX.PlayerData.job.grade_name == 'boss' then
+            ESX.ShowHelpNotification('Appuyez sur ~INPUT_CONTEXT~ pour gérer l\'entreprise')
+            DrawMarker(6, Config.Pos.Boss.x, Config.Pos.Boss.y, Config.Pos.Boss.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7, 0.7, 0, 251, 255, 200, false, true, 2, false, nil, nil, false)
 
             if IsControlJustPressed(1, 51) then
-                 ExecuteCommand("society")
+                openBossMenu()
             end
-
-        else 
-            Citizen.Wait(1000)
+            Wait(0)
+        else
+            Wait(500)
         end
-        Citizen.Wait(0)
     end
 end)
